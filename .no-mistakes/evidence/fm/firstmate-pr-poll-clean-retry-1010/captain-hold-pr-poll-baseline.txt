@@ -1,0 +1,19 @@
+Before-fix live reproduction: base completion disarms an armed PR poll
+base_commit: fb75c1f94170df7e0751147ea61afabcf5d4e104
+isolated_dependency: tasks-axi 0.2.6
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+strict_poll_before_completion: authenticated
+complete: ship-guard captain-call inventory reviewed
+strict_poll_after_base_completion: rejected (original failure reproduced)
+base_persisted_layout:
+pr=https://github.com/kunchenguid/firstmate/pull/6965
+pr_head=85bef3f8126fd78636617be19e493bfb6dba7283
+decisions_reviewed=1
+decision_keys=
+baseline_result: reproduced

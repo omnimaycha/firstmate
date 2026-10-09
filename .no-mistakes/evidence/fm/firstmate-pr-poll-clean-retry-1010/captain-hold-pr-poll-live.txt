@@ -1,0 +1,57 @@
+Live validation: captain review completion preserves PR merge supervision
+target_commit: 97c87edc20e140a490be4e7b94d6488c685368d0
+isolated_dependency: tasks-axi 0.2.6
+public_pr_target:
+pull_request:
+  number: 6965
+  title: "fix(bin): guide supervision through completed scout cleanup"
+  state: open
+  author: Puh00
+  draft: no
+  merged: no
+  checks: "0 passed, 0 failed — this PR has no CI checks configured"
+
+[arm production poll]
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+armed: state/ship-guard.check.sh
+strict_poll_snapshot: authenticated
+poll_identity: provider=github url=https://github.com/kunchenguid/firstmate/pull/6965 number=6965
+metadata_before_completion:
+pr=https://github.com/kunchenguid/firstmate/pull/6965
+pr_head=85bef3f8126fd78636617be19e493bfb6dba7283
+
+[scenario 1: explicit empty reviewed inventory]
+complete: ship-guard captain-call inventory reviewed
+strict_poll_after_none: authenticated
+live_poll_after_none: silent as expected for the still-open PR
+
+[scenario 2: reviewed non-empty captain-held inventory]
+guard-review-call
+complete: ship-guard captain-call inventory reviewed (guard-review-call)
+strict_poll_after_nonempty: authenticated
+verified: ship-guard captain-call inventory
+persisted_contract_after_nonempty:
+decisions_reviewed=1
+decision_keys=guard-review-call
+pr=https://github.com/kunchenguid/firstmate/pull/6965
+pr_head=85bef3f8126fd78636617be19e493bfb6dba7283
+identity_and_mode_after_nonempty: exact PR URL/head retained; mode=0600
+
+[scenario 3: legacy post-PR inventory is repaired, then retry is idempotent]
+pre_repair_strict_poll: rejected as expected
+complete: ship-guard captain-call inventory reviewed (guard-review-call)
+post_repair_strict_poll: authenticated
+complete: ship-guard captain-call inventory reviewed (guard-review-call)
+normalized_retry: unchanged identity=49:6447842 hash=c572cd14d5017a0cdc15b81103db07aeec9bad47f6a7bae0273a37021c0d89f3
+final_persisted_contract:
+decisions_reviewed=1
+decision_keys=guard-review-call
+pr=https://github.com/kunchenguid/firstmate/pull/6965
+pr_head=85bef3f8126fd78636617be19e493bfb6dba7283
+final_result: all live scenarios passed
