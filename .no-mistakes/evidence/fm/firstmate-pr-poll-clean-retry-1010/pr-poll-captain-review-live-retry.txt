@@ -1,0 +1,39 @@
+tasks_axi_version=0.2.6
+SCENARIO 1: open PR stays monitored after a real captain-call inventory update
+  state: open
+  merged: no
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+armed: state/ship-open.check.sh
+complete: ship-open captain-call inventory reviewed (ship-open-call)
+poll_auth_after_inventory=valid
+published_poll_result_for_open_pr=<silent-as-expected>
+persisted_order=decision_keys(line 9) before pr(line 10)
+metadata_mode=600
+idempotent_retry_identity=49:6449364 (unchanged)
+scenario_1=PASS
+SCENARIO 2: stale post-PR inventory is repaired and a merged PR is detected
+  state: merged
+  merged: "2026-10-09T18:24:35Z"
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+armed: state/ship-repair.check.sh
+poll_auth_before_legacy_layout=valid
+poll_auth_with_legacy_post_pr_layout=invalid (regression reproduced)
+complete: ship-repair captain-call inventory reviewed
+poll_auth_after_complete_repair=valid
+repaired_order=decision_keys(line 9) before pr(line 10)
+published_poll_result_for_merged_pr=merged
+metadata_mode_after_repair=600
+verified: ship-repair captain-call inventory
+scenario_2=PASS
+WATCHER PROOF: authenticated foreground supervision consumes the repaired merged poll
+check: /tmp/fm-lab.3U031p/state/ship-repair.check.sh: merged
+watcher_retired_merged_poll=yes
+open_pr_poll_remains_armed=yes
+watcher_proof=PASS
+LIVE_VALIDATION=PASS
