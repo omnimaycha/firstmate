@@ -49,6 +49,33 @@ assert_contains "$got" "[captain]" "search shows the role"
 assert_contains "$got" "id=telegram:555:-:1001" "search shows the event id as provenance"
 pass "capture stores a multiline Captain message and search returns it verbatim"
 
+BASE64_SHIM_DIR="$TMP_ROOT/base64-shim"
+REAL_BASE64=$(command -v base64)
+if printf 'Zg==' | "$REAL_BASE64" -d >/dev/null 2>&1; then
+  REAL_BASE64_DECODE_FLAG=-d
+else
+  REAL_BASE64_DECODE_FLAG=-D
+fi
+mkdir -p "$BASE64_SHIM_DIR"
+cat > "$BASE64_SHIM_DIR/base64" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -d) exit 64 ;;
+  -D)
+    shift
+    exec "$FM_TEST_REAL_BASE64" "$FM_TEST_REAL_BASE64_DECODE_FLAG" "$@"
+    ;;
+  *) exec "$FM_TEST_REAL_BASE64" "$@" ;;
+esac
+EOF
+chmod +x "$BASE64_SHIM_DIR/base64"
+portable_decode=$(FM_TEST_REAL_BASE64="$REAL_BASE64" \
+  FM_TEST_REAL_BASE64_DECODE_FLAG="$REAL_BASE64_DECODE_FLAG" \
+  PATH="$BASE64_SHIM_DIR:$PATH" FM_DATA_OVERRIDE="$DATA" \
+  "$CL" search 'line two 123')
+assert_contains "$portable_decode" "line two 123" "search falls back to the BSD base64 decode interface"
+pass "archive decoding supports GNU and BSD base64 interfaces"
+
 # --- idempotent replay ------------------------------------------------------
 out2=$(printf 'line one\nline two 123\n' | FM_DATA_OVERRIDE="$DATA" "$CL" \
   append --role captain --chat 555 --msg-id 1001)
@@ -239,6 +266,13 @@ assert_equals "2" "$shown" "search output is bounded by --limit"
 assert_contains "$bounded" "more match(es) not shown" "search names how many matches were withheld"
 pass "retrieval output is bounded"
 
+set +e
+FM_DATA_OVERRIDE="$DATA_B" "$CL" search '[' >/dev/null 2>&1
+rc_invalid_regex=$?
+set -e 2>/dev/null || true
+expect_code 2 "$rc_invalid_regex" "search rejects an invalid regular expression"
+pass "search validates its public regular expression"
+
 # --- Captain-directed redaction and purge -----------------------------------
 DATA_D=$(fresh_data redact)
 printf 'a password is hunter2' | FM_DATA_OVERRIDE="$DATA_D" "$CL" \
@@ -330,43 +364,66 @@ assert_contains "$retry_result" "complete retry body" "the complete retry is pub
 pass "append publishes complete records atomically"
 
 DATA_K=$(fresh_data stale-lock)
-DATE_SHIM_DIR="$TMP_ROOT/date-shim"
-DATE_ENTERED="$TMP_ROOT/date.entered"
-DATE_RELEASE="$TMP_ROOT/date.release"
-REAL_DATE=$(command -v date)
-mkdir -p "$DATE_SHIM_DIR"
-cat > "$DATE_SHIM_DIR/date" <<'EOF'
+MOVE_SHIM_DIR="$TMP_ROOT/move-shim"
+MOVE_ENTERED="$TMP_ROOT/move.entered"
+MOVE_RELEASE="$TMP_ROOT/move.release"
+KILLED_BODY="$TMP_ROOT/killed-body"
+SECRET_BODY='remove every retained copy after interrupted append'
+SECRET_ENCODED=$(printf '%s' "$SECRET_BODY" | base64 | tr -d '\n')
+mkdir -p "$MOVE_SHIM_DIR"
+cat > "$MOVE_SHIM_DIR/mv" <<'EOF'
 #!/usr/bin/env bash
-: > "$FM_TEST_DATE_ENTERED"
-while [ ! -e "$FM_TEST_DATE_RELEASE" ]; do
+: > "$FM_TEST_MOVE_ENTERED"
+while [ ! -e "$FM_TEST_MOVE_RELEASE" ]; do
   sleep 0.01
 done
-exec "$FM_TEST_REAL_DATE" "$@"
+exit 99
 EOF
-chmod +x "$DATE_SHIM_DIR/date"
-printf 'visible after stale lock recovery' | FM_DATA_OVERRIDE="$DATA_K" "$CL" \
+chmod +x "$MOVE_SHIM_DIR/mv"
+printf '%s' "$SECRET_BODY" | FM_DATA_OVERRIDE="$DATA_K" "$CL" \
   append --role captain --chat 41 --msg-id victim >/dev/null
-FM_TEST_DATE_ENTERED="$DATE_ENTERED" FM_TEST_DATE_RELEASE="$DATE_RELEASE" \
-  FM_TEST_REAL_DATE="$REAL_DATE" PATH="$DATE_SHIM_DIR:$PATH" \
-  FM_DATA_OVERRIDE="$DATA_K" "$CL" redact --event-id telegram:41:-:victim \
-    --reason interrupted >/dev/null 2>&1 &
+printf 'publish only after a complete retry' > "$KILLED_BODY"
+FM_TEST_MOVE_ENTERED="$MOVE_ENTERED" FM_TEST_MOVE_RELEASE="$MOVE_RELEASE" \
+  PATH="$MOVE_SHIM_DIR:$PATH" FM_DATA_OVERRIDE="$DATA_K" "$CL" append \
+    --role captain --chat 41 --msg-id interrupted --file "$KILLED_BODY" \
+    >/dev/null 2>&1 &
 stale_holder_pid=$!
-date_checks=0
-while [ ! -e "$DATE_ENTERED" ] && [ "$date_checks" -lt 500 ]; do
-  date_checks=$((date_checks + 1))
+move_checks=0
+while [ ! -e "$MOVE_ENTERED" ] && [ "$move_checks" -lt 500 ]; do
+  move_checks=$((move_checks + 1))
   sleep 0.01
 done
-[ -e "$DATE_ENTERED" ] || fail "redact did not reach its locked transaction"
+[ -e "$MOVE_ENTERED" ] || fail "append did not reach its publish boundary"
 kill -KILL "$stale_holder_pid" 2>/dev/null || fail "could not interrupt the lock holder"
-: > "$DATE_RELEASE"
+: > "$MOVE_RELEASE"
 set +e
 wait "$stale_holder_pid" >/dev/null 2>&1
 stale_holder_rc=$?
 set -e 2>/dev/null || true
 [ "$stale_holder_rc" -ne 0 ] || fail "the interrupted lock holder exited successfully"
-recovered_result=$(FM_DATA_OVERRIDE="$DATA_K" "$CL" search 'visible after stale lock recovery')
-assert_contains "$recovered_result" "visible after stale lock recovery" "a later command recovers a dead holder's lock"
-pass "dead archive lock owners are recovered automatically"
+stale_copy=''
+for candidate in "$DATA_K/captain-log"/.fm-captain-log.*; do
+  [ -f "$candidate" ] || continue
+  if grep -Fq -- "$SECRET_ENCODED" "$candidate"; then
+    stale_copy=$candidate
+    break
+  fi
+done
+[ -n "$stale_copy" ] || fail "interrupted append did not retain the staged regression fixture"
+FM_DATA_OVERRIDE="$DATA_K" "$CL" redact --event-id telegram:41:-:victim --purge >/dev/null
+if grep -r -Fq -- "$SECRET_ENCODED" "$DATA_K/captain-log"; then
+  fail "purge left Captain content in the archive tree"
+fi
+for candidate in "$DATA_K/captain-log"/.fm-captain-log.*; do
+  [ ! -e "$candidate" ] && [ ! -L "$candidate" ] \
+    || fail "purge left an abandoned replacement file"
+done
+retry_killed=$(FM_DATA_OVERRIDE="$DATA_K" "$CL" append --role captain \
+  --chat 41 --msg-id interrupted --file "$KILLED_BODY")
+assert_contains "$retry_killed" "appended telegram:41:-:interrupted" "a killed append can be retried after lock recovery"
+recovered_result=$(FM_DATA_OVERRIDE="$DATA_K" "$CL" search 'publish only after a complete retry')
+assert_contains "$recovered_result" "publish only after a complete retry" "the complete retry remains searchable"
+pass "dead-owner recovery clears abandoned content before purge"
 
 # --- excluded from the injected startup-memory budget -----------------------
 HOME_B="$TMP_ROOT/budget"

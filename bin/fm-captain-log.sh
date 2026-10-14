@@ -51,6 +51,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 ARCHIVE_DIR="$DATA/captain-log"
 ARCHIVE_LOCK="$ARCHIVE_DIR/.lock"
+ARCHIVE_TEMP_PREFIX=.fm-captain-log.
 
 REC_VERSION=fmcl1
 TAB=$'\t'
@@ -90,7 +91,10 @@ valid_event_id() {
 
 b64_encode_file() { base64 < "$1" | tr -d '\n'; }
 b64_encode_str() { printf '%s' "$1" | base64 | tr -d '\n'; }
-b64_decode() { printf '%s' "$1" | base64 -d; }
+b64_decode() {
+  printf '%s' "$1" | base64 -d 2>/dev/null \
+    || printf '%s' "$1" | base64 -D 2>/dev/null
+}
 
 path_owner() {
   if [ "$(uname)" = Darwin ]; then
@@ -148,6 +152,19 @@ archive_file_safe() {
   [ "$mode" = 600 ] || die "archive file mode is not 0600: $file"
 }
 
+clear_abandoned_replacements() {
+  local stale
+  for stale in "$ARCHIVE_DIR"/"$ARCHIVE_TEMP_PREFIX"*; do
+    [ -e "$stale" ] || [ -L "$stale" ] || continue
+    if [ -L "$stale" ]; then
+      rm -f -- "$stale" || die "cannot remove abandoned replacement: $stale"
+      continue
+    fi
+    archive_file_safe "$stale"
+    rm -f -- "$stale" || die "cannot remove abandoned replacement: $stale"
+  done
+}
+
 archive_lock_release() {
   if [ "$LOCK_HELD" = 1 ]; then
     fm_lock_release "$ARCHIVE_LOCK" || true
@@ -171,11 +188,12 @@ archive_lock_acquire() {
   fi
   fm_lock_acquire_wait "$ARCHIVE_LOCK" || die "cannot lock archive"
   LOCK_HELD=1
+  clear_abandoned_replacements
 }
 
 begin_archive_replacement() {
   local operation=$1
-  TEMP_FILE=$(mktemp "$ARCHIVE_DIR/.fm-captain-log.XXXXXX") \
+  TEMP_FILE=$(mktemp "$ARCHIVE_DIR/${ARCHIVE_TEMP_PREFIX}XXXXXX") \
     || die "$operation: cannot create replacement file"
   chmod 0600 "$TEMP_FILE" || die "$operation: cannot secure replacement file"
   archive_file_safe "$TEMP_FILE"
@@ -236,12 +254,7 @@ cmd_append() {
     [ -f "$file" ] || die "append: --file not found: $file"
     body=$(b64_encode_file "$file")
   else
-    local tmp
-    tmp=$(mktemp "${TMPDIR:-/tmp}/fm-captain-log.XXXXXX")
-    chmod 0600 "$tmp"
-    cat > "$tmp"
-    body=$(b64_encode_file "$tmp")
-    rm -f "$tmp"
+    body=$(base64 | tr -d '\n')
   fi
 
   local captured_at month target
@@ -285,7 +298,7 @@ EOF
 }
 
 cmd_search() {
-  local limit=$SEARCH_DEFAULT_LIMIT query='' f line decoded shown=0 matched=0
+  local limit=$SEARCH_DEFAULT_LIMIT query='' regex_status f line decoded shown=0 matched=0
   local _v _event_id _role _channel _chat _topic _captured redacted _body
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -299,6 +312,12 @@ cmd_search() {
   [ "$#" -eq 0 ] || die "search: unexpected extra argument"
   case "$limit" in ''|*[!0-9]*) die "search: --limit must be a number" ;; esac
   [ -n "$query" ] || die "search: a <regex> is required"
+  if grep -Eq -- "$query" </dev/null 2>/dev/null; then
+    :
+  else
+    regex_status=$?
+    [ "$regex_status" -eq 1 ] || die "search: invalid <regex>"
+  fi
 
   if ! archive_dir_safe; then
     printf 'no captain-log archive yet (%s)\n' "$ARCHIVE_DIR"
