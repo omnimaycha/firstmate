@@ -34,6 +34,8 @@ assert_contains "$help" "Never archive another group member's messages" "help ex
 assert_contains "$help" "Message content remains until Captain-directed" "help states the retention duration"
 assert_contains "$help" "may contain secrets" "help does not claim secret-free storage"
 assert_contains "$help" "sole privacy control is 0700" "help names file modes as the sole privacy control"
+assert_contains "$help" "shared PID-liveness lock" "help identifies the shared archive lock contract"
+assert_contains "$help" "accepted residual risk" "help discloses the accepted PID-reuse wait risk"
 pass "help exposes the approved capture, retention, and privacy policy"
 
 # --- capture with multiline fidelity ---------------------------------------
@@ -113,7 +115,17 @@ set -e 2>/dev/null || true
 expect_code 2 "$rc_tombstone_encode" "redact rejects a failed tombstone encoding pipeline"
 encode_failure_result=$(FM_DATA_OVERRIDE="$DATA_E" "$CL" search 'redaction content remains intact')
 assert_contains "$encode_failure_result" "redaction content remains intact" "failed tombstone encoding leaves content unchanged"
-pass "encoding failures cannot publish truncated archive content"
+set +e
+purge_without_encoder=$(FM_TEST_REAL_BASE64="$REAL_BASE64" \
+  PATH="$ENCODE_FAIL_SHIM_DIR:$PATH" FM_DATA_OVERRIDE="$DATA_E" "$CL" \
+    redact --event-id telegram:556:-:redact --purge 2>/dev/null)
+rc_purge_without_encoder=$?
+set -e 2>/dev/null || true
+expect_code 0 "$rc_purge_without_encoder" "purge does not depend on reason-tombstone encoding"
+assert_contains "$purge_without_encoder" "purged telegram:556:-:redact" "purge completes when base64 encoding fails"
+purge_without_encoder_result=$(FM_DATA_OVERRIDE="$DATA_E" "$CL" search 'redaction content remains intact')
+assert_not_contains "$purge_without_encoder_result" "redaction content remains intact" "purge removes content without base64"
+pass "encoding failures cannot publish truncated content or block purge"
 
 # --- idempotent replay ------------------------------------------------------
 out2=$(printf 'line one\nline two 123\n' | FM_DATA_OVERRIDE="$DATA" "$CL" \

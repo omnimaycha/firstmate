@@ -38,6 +38,10 @@
 # `<channel>:<chat>:<topic>:<msg-id>`: a repeat of the same event is not stored
 # twice and prints `replay <event-id>`. This lets the bridge retry safely.
 #
+# Locking uses the repository's shared PID-liveness lock.
+# If a holder is killed by SIGKILL or the host reboots and its PID is later reused by an unrelated long-lived process, an archive operation can wait for that process's lifetime.
+# This rare case is an accepted residual risk for a local single-user archive and is deliberately not mitigated here by changing the shared lock protocol or using mtime-based lock stealing.
+#
 # EXIT CODES: 0 success (including idempotent replay); 2 usage/validation error
 # (bad role, missing field, unsafe value); 3 not found (redact).
 # END HELP
@@ -404,10 +408,12 @@ cmd_redact() {
   archive_lock_acquire
   archive_dir_safe || die "redact: no archive" 3
 
-  local tomb_at tomb
+  local tomb_at tomb=''
   tomb_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  tomb=$(b64_encode_str "[redacted ${tomb_at} by captain order: ${reason}]") \
-    || die "redact: cannot encode tombstone"
+  if [ "$purge" = 0 ]; then
+    tomb=$(b64_encode_str "[redacted ${tomb_at} by captain order: ${reason}]") \
+      || die "redact: cannot encode tombstone"
+  fi
 
   for f in "$ARCHIVE_DIR"/*.log; do
     [ -e "$f" ] || [ -L "$f" ] || continue
