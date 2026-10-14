@@ -77,7 +77,7 @@ assert_equals "700" "$(file_mode "$DATA_P/captain-log")" "append repairs the arc
 assert_equals "600" "$(file_mode "$DATA_P/captain-log/$month.log")" "append repairs the archive file mode"
 chmod 0755 "$DATA_P/captain-log"
 chmod 0644 "$DATA_P/captain-log/$month.log"
-FM_DATA_OVERRIDE="$DATA_P" "$CL" search --all >/dev/null
+FM_DATA_OVERRIDE="$DATA_P" "$CL" search '.*' >/dev/null
 assert_equals "700" "$(file_mode "$DATA_P/captain-log")" "search repairs the archive directory mode"
 assert_equals "600" "$(file_mode "$DATA_P/captain-log/$month.log")" "search repairs the archive file mode"
 chmod 0755 "$DATA_P/captain-log"
@@ -96,7 +96,7 @@ set +e
 printf 'must not escape' | FM_DATA_OVERRIDE="$DATA_S" "$CL" \
   append --role captain --chat 11 --msg-id 1 >/dev/null 2>&1
 rc_symlink_dir_append=$?
-FM_DATA_OVERRIDE="$DATA_S" "$CL" search --all >/dev/null 2>&1
+FM_DATA_OVERRIDE="$DATA_S" "$CL" search '.*' >/dev/null 2>&1
 rc_symlink_dir_search=$?
 FM_DATA_OVERRIDE="$DATA_S" "$CL" redact --event-id telegram:11:-:1 --reason x >/dev/null 2>&1
 rc_symlink_dir_redact=$?
@@ -115,7 +115,7 @@ set +e
 printf 'must not follow' | FM_DATA_OVERRIDE="$DATA_F" "$CL" \
   append --role captain --chat 12 --msg-id 1 >/dev/null 2>&1
 rc_symlink_file_append=$?
-FM_DATA_OVERRIDE="$DATA_F" "$CL" search --all >/dev/null 2>&1
+FM_DATA_OVERRIDE="$DATA_F" "$CL" search '.*' >/dev/null 2>&1
 rc_symlink_file_search=$?
 FM_DATA_OVERRIDE="$DATA_F" "$CL" redact --event-id telegram:12:-:1 --reason x >/dev/null 2>&1
 rc_symlink_file_redact=$?
@@ -156,6 +156,41 @@ expect_code 2 "$rc_topic_colon" "a topic containing the event-id delimiter is re
 expect_code 2 "$rc_msg_colon" "a message id containing the event-id delimiter is refused"
 assert_absent "$DATA_R/captain-log" "a refused append writes nothing"
 pass "non-Captain roles and ambiguous event-id components are refused"
+
+DATA_V=$(fresh_data option-values)
+for option in --role --channel --chat --topic --msg-id --file; do
+  set +e
+  FM_DATA_OVERRIDE="$DATA_V" "$CL" append "$option" >/dev/null 2>&1
+  rc_missing_value=$?
+  set -e 2>/dev/null || true
+  expect_code 2 "$rc_missing_value" "append rejects a trailing $option without a value"
+done
+set +e
+FM_DATA_OVERRIDE="$DATA_V" "$CL" search --limit >/dev/null 2>&1
+rc_search_limit=$?
+FM_DATA_OVERRIDE="$DATA_V" "$CL" redact --event-id >/dev/null 2>&1
+rc_redact_event=$?
+FM_DATA_OVERRIDE="$DATA_V" "$CL" redact --reason >/dev/null 2>&1
+rc_redact_reason=$?
+set -e 2>/dev/null || true
+expect_code 2 "$rc_search_limit" "search rejects a trailing --limit without a value"
+expect_code 2 "$rc_redact_event" "redact rejects a trailing --event-id without a value"
+expect_code 2 "$rc_redact_reason" "redact rejects a trailing --reason without a value"
+pass "value-taking options fail through the documented validation path"
+
+for removed_mode in path dir; do
+  set +e
+  FM_DATA_OVERRIDE="$DATA_V" "$CL" "$removed_mode" >/dev/null 2>&1
+  rc_removed_mode=$?
+  set -e 2>/dev/null || true
+  expect_code 2 "$rc_removed_mode" "$removed_mode is not a public command"
+done
+set +e
+FM_DATA_OVERRIDE="$DATA_V" "$CL" search --all >/dev/null 2>&1
+rc_search_all=$?
+set -e 2>/dev/null || true
+expect_code 2 "$rc_search_all" "search --all is not a public convenience mode"
+pass "the archive CLI exposes only its required command surface"
 
 # --- concurrent appends serialize the replay decision -----------------------
 DATA_X=$(fresh_data concurrent)
@@ -211,20 +246,20 @@ printf 'a password is hunter2' | FM_DATA_OVERRIDE="$DATA_D" "$CL" \
 printf 'keep this one' | FM_DATA_OVERRIDE="$DATA_D" "$CL" \
   append --role captain --chat 9 --msg-id 51 >/dev/null
 FM_DATA_OVERRIDE="$DATA_D" "$CL" redact --event-id telegram:9:-:50 --reason "secret" >/dev/null
-after=$(FM_DATA_OVERRIDE="$DATA_D" "$CL" search --all)
+after=$(FM_DATA_OVERRIDE="$DATA_D" "$CL" search '.*')
 assert_contains "$after" "(redacted)" "a redacted entry is marked"
 assert_contains "$after" "by captain order: secret" "the redaction records the reason"
 assert_not_contains "$after" "hunter2" "the secret text is gone after redaction"
 assert_contains "$after" "keep this one" "redaction leaves other entries intact"
 FM_DATA_OVERRIDE="$DATA_D" "$CL" redact --event-id telegram:9:-:50 --purge >/dev/null
-purged=$(FM_DATA_OVERRIDE="$DATA_D" "$CL" search --all)
+purged=$(FM_DATA_OVERRIDE="$DATA_D" "$CL" search '.*')
 assert_not_contains "$purged" "telegram:9:-:50" "a purged entry is hidden from retrieval"
 assert_contains "$purged" "keep this one" "purge leaves other entries intact"
 retry=$(printf 'attempted resurrection' | FM_DATA_OVERRIDE="$DATA_D" "$CL" \
   append --role captain --chat 9 --msg-id 50)
 assert_contains "$retry" "replay telegram:9:-:50" "a bridge retry cannot resurrect purged content"
 FM_DATA_OVERRIDE="$DATA_D" "$CL" redact --event-id telegram:9:-:50 --reason later >/dev/null
-after_retry=$(FM_DATA_OVERRIDE="$DATA_D" "$CL" search --all)
+after_retry=$(FM_DATA_OVERRIDE="$DATA_D" "$CL" search '.*')
 assert_not_contains "$after_retry" "attempted resurrection" "the retried body remains absent"
 assert_not_contains "$after_retry" "telegram:9:-:50" "later redaction does not expose a purge tombstone"
 set +e
@@ -269,6 +304,69 @@ wait "$redact_pid" || fail "concurrent redaction failed"
 transaction_result=$(FM_DATA_OVERRIDE="$DATA_T" "$CL" search 'survives concurrent redact')
 assert_contains "$transaction_result" "survives concurrent redact" "redaction does not overwrite a concurrent append"
 pass "append and redaction share one lossless transaction boundary"
+
+DATA_I=$(fresh_data interruption)
+INTERRUPTED_BODY="$TMP_ROOT/interrupted-body"
+dd if=/dev/zero bs=4096 count=1 2>/dev/null | tr '\000' z > "$INTERRUPTED_BODY"
+printf 'survives interrupted append' | FM_DATA_OVERRIDE="$DATA_I" "$CL" \
+  append --role captain --chat 40 --msg-id survivor >/dev/null
+set +e
+(
+  ulimit -c 0
+  ulimit -f 1
+  FM_DATA_OVERRIDE="$DATA_I" "$CL" append --role captain --chat 40 \
+    --msg-id interrupted --file "$INTERRUPTED_BODY"
+) >/dev/null 2>&1
+rc_interrupted_append=$?
+set -e 2>/dev/null || true
+[ "$rc_interrupted_append" -ne 0 ] || fail "the file-size limit did not interrupt append"
+survivor_result=$(FM_DATA_OVERRIDE="$DATA_I" "$CL" search 'survives interrupted append')
+assert_contains "$survivor_result" "survives interrupted append" "an interrupted append leaves the prior archive readable"
+retry_interrupted=$(printf 'complete retry body' | FM_DATA_OVERRIDE="$DATA_I" "$CL" \
+  append --role captain --chat 40 --msg-id interrupted)
+assert_contains "$retry_interrupted" "appended telegram:40:-:interrupted" "an interrupted event can be retried instead of becoming a false replay"
+retry_result=$(FM_DATA_OVERRIDE="$DATA_I" "$CL" search 'complete retry body')
+assert_contains "$retry_result" "complete retry body" "the complete retry is published after interruption"
+pass "append publishes complete records atomically"
+
+DATA_K=$(fresh_data stale-lock)
+DATE_SHIM_DIR="$TMP_ROOT/date-shim"
+DATE_ENTERED="$TMP_ROOT/date.entered"
+DATE_RELEASE="$TMP_ROOT/date.release"
+REAL_DATE=$(command -v date)
+mkdir -p "$DATE_SHIM_DIR"
+cat > "$DATE_SHIM_DIR/date" <<'EOF'
+#!/usr/bin/env bash
+: > "$FM_TEST_DATE_ENTERED"
+while [ ! -e "$FM_TEST_DATE_RELEASE" ]; do
+  sleep 0.01
+done
+exec "$FM_TEST_REAL_DATE" "$@"
+EOF
+chmod +x "$DATE_SHIM_DIR/date"
+printf 'visible after stale lock recovery' | FM_DATA_OVERRIDE="$DATA_K" "$CL" \
+  append --role captain --chat 41 --msg-id victim >/dev/null
+FM_TEST_DATE_ENTERED="$DATE_ENTERED" FM_TEST_DATE_RELEASE="$DATE_RELEASE" \
+  FM_TEST_REAL_DATE="$REAL_DATE" PATH="$DATE_SHIM_DIR:$PATH" \
+  FM_DATA_OVERRIDE="$DATA_K" "$CL" redact --event-id telegram:41:-:victim \
+    --reason interrupted >/dev/null 2>&1 &
+stale_holder_pid=$!
+date_checks=0
+while [ ! -e "$DATE_ENTERED" ] && [ "$date_checks" -lt 500 ]; do
+  date_checks=$((date_checks + 1))
+  sleep 0.01
+done
+[ -e "$DATE_ENTERED" ] || fail "redact did not reach its locked transaction"
+kill -KILL "$stale_holder_pid" 2>/dev/null || fail "could not interrupt the lock holder"
+: > "$DATE_RELEASE"
+set +e
+wait "$stale_holder_pid" >/dev/null 2>&1
+stale_holder_rc=$?
+set -e 2>/dev/null || true
+[ "$stale_holder_rc" -ne 0 ] || fail "the interrupted lock holder exited successfully"
+recovered_result=$(FM_DATA_OVERRIDE="$DATA_K" "$CL" search 'visible after stale lock recovery')
+assert_contains "$recovered_result" "visible after stale lock recovery" "a later command recovers a dead holder's lock"
+pass "dead archive lock owners are recovered automatically"
 
 # --- excluded from the injected startup-memory budget -----------------------
 HOME_B="$TMP_ROOT/budget"

@@ -20,10 +20,8 @@
 #   fm-captain-log.sh append --role <captain|captain-group> --chat <id> \
 #       --msg-id <id> [--channel <name>] [--topic <id>] [--file <path>]
 #       (message content on stdin unless --file is given)
-#   fm-captain-log.sh search [--limit <n>] [--all] [--] [<regex>]
+#   fm-captain-log.sh search [--limit <n>] [--] <regex>
 #   fm-captain-log.sh redact --event-id <id> --reason <text> [--purge]
-#   fm-captain-log.sh path        (print the current month's archive file)
-#   fm-captain-log.sh dir         (print the archive directory)
 #
 # Retention policy:
 #   Archive only messages whose sender the bridge authenticated as the Captain:
@@ -72,6 +70,11 @@ usage() {
 die() {
   printf 'fm-captain-log: %s\n' "$1" >&2
   exit "${2:-2}"
+}
+
+require_option_value() {
+  local command=$1 option=$2
+  [ "$#" -ge 3 ] || die "$command: $option requires a value"
 }
 
 valid_token() {
@@ -147,7 +150,7 @@ archive_file_safe() {
 
 archive_lock_release() {
   if [ "$LOCK_HELD" = 1 ]; then
-    rmdir "$ARCHIVE_LOCK" 2>/dev/null || true
+    fm_lock_release "$ARCHIVE_LOCK" || true
     LOCK_HELD=0
   fi
 }
@@ -160,18 +163,33 @@ cleanup() {
 trap cleanup EXIT
 
 archive_lock_acquire() {
-  local attempts=0
-  while ! mkdir "$ARCHIVE_LOCK" 2>/dev/null; do
-    [ ! -L "$ARCHIVE_LOCK" ] || die "archive lock is symlinked"
-    if [ -e "$ARCHIVE_LOCK" ]; then
-      [ -d "$ARCHIVE_LOCK" ] || die "archive lock is not a directory"
-    fi
-    attempts=$((attempts + 1))
-    [ "$attempts" -lt 100 ] || die "archive is busy"
-    sleep 0.1
-  done
+  archive_dir_safe || die "archive directory is absent"
+  if ! declare -F fm_lock_acquire_wait >/dev/null 2>&1; then
+    FM_STATE_OVERRIDE=$ARCHIVE_DIR
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$SCRIPT_DIR/fm-wake-lib.sh"
+  fi
+  fm_lock_acquire_wait "$ARCHIVE_LOCK" || die "cannot lock archive"
   LOCK_HELD=1
-  chmod 0700 "$ARCHIVE_LOCK" || die "cannot secure archive lock"
+}
+
+begin_archive_replacement() {
+  local operation=$1
+  TEMP_FILE=$(mktemp "$ARCHIVE_DIR/.fm-captain-log.XXXXXX") \
+    || die "$operation: cannot create replacement file"
+  chmod 0600 "$TEMP_FILE" || die "$operation: cannot secure replacement file"
+  archive_file_safe "$TEMP_FILE"
+}
+
+publish_archive_replacement() {
+  local operation=$1 target=$2
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    archive_file_safe "$target"
+  fi
+  archive_file_safe "$TEMP_FILE"
+  mv -f -- "$TEMP_FILE" "$target" || die "$operation: cannot publish replacement file"
+  TEMP_FILE=''
+  archive_file_safe "$target"
 }
 
 record_exists() {
@@ -188,12 +206,12 @@ cmd_append() {
   local role='' channel=telegram chat='' topic='' msg_id='' file=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --role) role=${2:-}; shift 2 ;;
-      --channel) channel=${2:-}; shift 2 ;;
-      --chat) chat=${2:-}; shift 2 ;;
-      --topic) topic=${2:-}; shift 2 ;;
-      --msg-id) msg_id=${2:-}; shift 2 ;;
-      --file) file=${2:-}; shift 2 ;;
+      --role) require_option_value append "$@"; role=$2; shift 2 ;;
+      --channel) require_option_value append "$@"; channel=$2; shift 2 ;;
+      --chat) require_option_value append "$@"; chat=$2; shift 2 ;;
+      --topic) require_option_value append "$@"; topic=$2; shift 2 ;;
+      --msg-id) require_option_value append "$@"; msg_id=$2; shift 2 ;;
+      --file) require_option_value append "$@"; file=$2; shift 2 ;;
       --) shift; break ;;
       -*) die "append: unknown option $1" ;;
       *) die "append: unexpected argument $1" ;;
@@ -240,14 +258,16 @@ cmd_append() {
   target="$ARCHIVE_DIR/${month}.log"
   if [ -e "$target" ] || [ -L "$target" ]; then
     archive_file_safe "$target"
-  else
-    (set -C; : > "$target") 2>/dev/null || die "cannot create archive file: $target"
-    archive_file_safe "$target"
+  fi
+  begin_archive_replacement append
+  if [ -e "$target" ]; then
+    cat "$target" > "$TEMP_FILE" || die "append: cannot stage archive file"
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$REC_VERSION" "$event_id" "$role" "$channel" "$chat" "$topic" \
-    "$captured_at" 0 "$body" >> "$target"
-  archive_file_safe "$target"
+    "$captured_at" 0 "$body" >> "$TEMP_FILE" \
+    || die "append: cannot stage archive record"
+  publish_archive_replacement append "$target"
   printf 'appended %s\n' "$event_id"
 }
 
@@ -265,12 +285,11 @@ EOF
 }
 
 cmd_search() {
-  local limit=$SEARCH_DEFAULT_LIMIT all=0 query='' f line decoded shown=0 matched=0
+  local limit=$SEARCH_DEFAULT_LIMIT query='' f line decoded shown=0 matched=0
   local _v _event_id _role _channel _chat _topic _captured redacted _body
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --limit) limit=${2:-}; shift 2 ;;
-      --all) all=1; shift ;;
+      --limit) require_option_value search "$@"; limit=$2; shift 2 ;;
       --) shift; break ;;
       -*) die "search: unknown option $1" ;;
       *) break ;;
@@ -279,7 +298,7 @@ cmd_search() {
   [ "$#" -eq 0 ] || { query=$1; shift; }
   [ "$#" -eq 0 ] || die "search: unexpected extra argument"
   case "$limit" in ''|*[!0-9]*) die "search: --limit must be a number" ;; esac
-  [ "$all" = 1 ] || [ -n "$query" ] || die "search: a <regex> is required unless --all is given"
+  [ -n "$query" ] || die "search: a <regex> is required"
 
   if ! archive_dir_safe; then
     printf 'no captain-log archive yet (%s)\n' "$ARCHIVE_DIR"
@@ -301,7 +320,7 @@ EOF
         2) continue ;;
         *) die "archive contains an invalid record: $f" ;;
       esac
-      if [ "$all" = 1 ] || printf '%s' "$decoded" | grep -Eiq -- "$query"; then
+      if printf '%s' "$decoded" | grep -Eiq -- "$query"; then
         matched=$((matched + 1))
         if [ "$shown" -lt "$limit" ]; then
           print_record "$line"
@@ -322,8 +341,8 @@ cmd_redact() {
   local event_id='' reason='' purge=0 f line found=0 purge_written=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --event-id) event_id=${2:-}; shift 2 ;;
-      --reason) reason=${2:-}; shift 2 ;;
+      --event-id) require_option_value redact "$@"; event_id=$2; shift 2 ;;
+      --reason) require_option_value redact "$@"; reason=$2; shift 2 ;;
       --purge) purge=1; shift ;;
       --) shift; break ;;
       *) die "redact: unknown option $1" ;;
@@ -344,9 +363,7 @@ cmd_redact() {
     [ -e "$f" ] || [ -L "$f" ] || continue
     archive_file_safe "$f"
     grep -Fq -- "${TAB}${event_id}${TAB}" "$f" || continue
-    TEMP_FILE=$(mktemp "$ARCHIVE_DIR/.fm-captain-log.XXXXXX") \
-      || die "redact: cannot create replacement file"
-    chmod 0600 "$TEMP_FILE" || die "redact: cannot secure replacement file"
+    begin_archive_replacement redact
     while IFS= read -r line; do
       case "$line" in
         *"${TAB}${event_id}${TAB}"*)
@@ -374,10 +391,7 @@ EOF
         *) printf '%s\n' "$line" >> "$TEMP_FILE" ;;
       esac
     done < "$f"
-    archive_file_safe "$f"
-    mv -f -- "$TEMP_FILE" "$f" || die "redact: cannot publish replacement file"
-    TEMP_FILE=''
-    archive_file_safe "$f"
+    publish_archive_replacement redact "$f"
   done
   [ "$found" = 1 ] || die "redact: event id not found: $event_id" 3
   if [ "$purge" = 1 ]; then
@@ -391,11 +405,6 @@ case "${1:-}" in
   append) shift; cmd_append "$@" ;;
   search) shift; cmd_search "$@" ;;
   redact) shift; cmd_redact "$@" ;;
-  path)
-    month=$(date -u +%Y-%m)
-    printf '%s/%s.log\n' "$ARCHIVE_DIR" "$month"
-    ;;
-  dir) printf '%s\n' "$ARCHIVE_DIR" ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
