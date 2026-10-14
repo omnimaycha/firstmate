@@ -249,6 +249,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/recall-captain/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/secondmate-provisioning/SKILL.md",
       "audience": "agent-runtime"
     },

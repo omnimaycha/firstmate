@@ -77,6 +77,7 @@ Each effective `FM_HOME` contains private operational directories.
 
 - Project and secondmate registries.
 - Captain preferences and optional shared captain preferences.
+- On-demand raw Captain-message history under `data/captain-log/`; the [`fm-captain-log.sh`](../bin/fm-captain-log.sh) header owns its retention, privacy, and retrieval contract.
 - Learnings, backlog, briefs, scout reports, and the optional per-task no-mistakes pipeline-spend ledger.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 
