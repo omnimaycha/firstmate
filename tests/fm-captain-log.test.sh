@@ -76,6 +76,45 @@ portable_decode=$(FM_TEST_REAL_BASE64="$REAL_BASE64" \
 assert_contains "$portable_decode" "line two 123" "search falls back to the BSD base64 decode interface"
 pass "archive decoding supports GNU and BSD base64 interfaces"
 
+ENCODE_FAIL_SHIM_DIR="$TMP_ROOT/encode-fail-shim"
+ENCODE_FILE="$TMP_ROOT/encode-file"
+mkdir -p "$ENCODE_FAIL_SHIM_DIR"
+printf 'file content must not be truncated' > "$ENCODE_FILE"
+cat > "$ENCODE_FAIL_SHIM_DIR/base64" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -d|-D) exec "$FM_TEST_REAL_BASE64" "$@" ;;
+  *) printf 'cGFydGlhbA=='; exit 64 ;;
+esac
+EOF
+chmod +x "$ENCODE_FAIL_SHIM_DIR/base64"
+DATA_E=$(fresh_data encode-failure)
+set +e
+printf 'stdin content must not be truncated' | FM_TEST_REAL_BASE64="$REAL_BASE64" \
+  PATH="$ENCODE_FAIL_SHIM_DIR:$PATH" FM_DATA_OVERRIDE="$DATA_E" "$CL" \
+    append --role captain --chat 556 --msg-id stdin >/dev/null 2>&1
+rc_stdin_encode=$?
+FM_TEST_REAL_BASE64="$REAL_BASE64" PATH="$ENCODE_FAIL_SHIM_DIR:$PATH" \
+  FM_DATA_OVERRIDE="$DATA_E" "$CL" append --role captain --chat 556 \
+    --msg-id file --file "$ENCODE_FILE" >/dev/null 2>&1
+rc_file_encode=$?
+set -e 2>/dev/null || true
+expect_code 2 "$rc_stdin_encode" "append rejects a failed stdin encoding pipeline"
+expect_code 2 "$rc_file_encode" "append rejects a failed file encoding pipeline"
+assert_absent "$DATA_E/captain-log" "failed message encoding publishes no archive state"
+printf 'redaction content remains intact' | FM_DATA_OVERRIDE="$DATA_E" "$CL" \
+  append --role captain --chat 556 --msg-id redact >/dev/null
+set +e
+FM_TEST_REAL_BASE64="$REAL_BASE64" PATH="$ENCODE_FAIL_SHIM_DIR:$PATH" \
+  FM_DATA_OVERRIDE="$DATA_E" "$CL" redact \
+    --event-id telegram:556:-:redact --reason requested >/dev/null 2>&1
+rc_tombstone_encode=$?
+set -e 2>/dev/null || true
+expect_code 2 "$rc_tombstone_encode" "redact rejects a failed tombstone encoding pipeline"
+encode_failure_result=$(FM_DATA_OVERRIDE="$DATA_E" "$CL" search 'redaction content remains intact')
+assert_contains "$encode_failure_result" "redaction content remains intact" "failed tombstone encoding leaves content unchanged"
+pass "encoding failures cannot publish truncated archive content"
+
 # --- idempotent replay ------------------------------------------------------
 out2=$(printf 'line one\nline two 123\n' | FM_DATA_OVERRIDE="$DATA" "$CL" \
   append --role captain --chat 555 --msg-id 1001)
@@ -153,6 +192,43 @@ expect_code 2 "$rc_symlink_file_redact" "redact refuses a symlinked archive file
 assert_equals "outside bytes" "$(cat "$OUTSIDE_FILE")" "refused accesses leave the symlink target unchanged"
 pass "all archive access paths fail closed on symlinks"
 
+DATA_Q=$(fresh_data preflight)
+printf 'preflight victim remains unchanged' | FM_DATA_OVERRIDE="$DATA_Q" "$CL" \
+  append --role captain --chat 13 --msg-id victim >/dev/null
+PREFLIGHT_LOG="$DATA_Q/captain-log/$month.log"
+PREFLIGHT_SNAPSHOT="$TMP_ROOT/preflight-month.snapshot"
+PREFLIGHT_ABANDONED="$DATA_Q/captain-log/.fm-captain-log.abandoned"
+PREFLIGHT_OUTSIDE="$TMP_ROOT/preflight-outside.log"
+cp "$PREFLIGHT_LOG" "$PREFLIGHT_SNAPSHOT"
+printf 'abandoned replacement bytes' > "$PREFLIGHT_ABANDONED"
+chmod 0600 "$PREFLIGHT_ABANDONED"
+printf 'outside preflight bytes\n' > "$PREFLIGHT_OUTSIDE"
+ln -s "$PREFLIGHT_OUTSIDE" "$DATA_Q/captain-log/9999-12.log"
+set +e
+printf 'must not be appended' | FM_DATA_OVERRIDE="$DATA_Q" "$CL" \
+  append --role captain --chat 13 --msg-id new >/dev/null 2>&1
+rc_preflight_append=$?
+FM_DATA_OVERRIDE="$DATA_Q" "$CL" redact \
+  --event-id telegram:13:-:victim --reason requested >/dev/null 2>&1
+rc_preflight_redact=$?
+set -e 2>/dev/null || true
+expect_code 2 "$rc_preflight_append" "append validates every month before cleanup or access"
+expect_code 2 "$rc_preflight_redact" "redact validates every month before cleanup or rewrite"
+assert_present "$PREFLIGHT_ABANDONED" "unsafe archive state prevents abandoned-file cleanup"
+cmp -s "$PREFLIGHT_SNAPSHOT" "$PREFLIGHT_LOG" \
+  || fail "unsafe later archive state allowed an earlier month rewrite"
+rm -f "$DATA_Q/captain-log/9999-12.log"
+ln -s "$PREFLIGHT_OUTSIDE" "$DATA_Q/captain-log/0000-01.log"
+set +e
+preflight_search=$(FM_DATA_OVERRIDE="$DATA_Q" "$CL" \
+  search 'preflight victim remains unchanged' 2>/dev/null)
+rc_preflight_search=$?
+set -e 2>/dev/null || true
+expect_code 2 "$rc_preflight_search" "search validates every month before retrieval"
+assert_equals "" "$preflight_search" "unsafe later search input produces no partial output"
+assert_present "$PREFLIGHT_ABANDONED" "unsafe search state prevents abandoned-file cleanup"
+pass "all archive commands validate the complete month set before access"
+
 # --- role refusal: only captain roles are captured --------------------------
 DATA_R=$(fresh_data refuse)
 set +e
@@ -217,6 +293,23 @@ FM_DATA_OVERRIDE="$DATA_V" "$CL" search --all >/dev/null 2>&1
 rc_search_all=$?
 set -e 2>/dev/null || true
 expect_code 2 "$rc_search_all" "search --all is not a public convenience mode"
+set +e
+printf 'must not pass a terminator' | FM_DATA_OVERRIDE="$DATA_V" "$CL" append \
+  --role captain --chat 14 --msg-id 1 -- >/dev/null 2>&1
+rc_append_terminator=$?
+set -e 2>/dev/null || true
+expect_code 2 "$rc_append_terminator" "append rejects an unneeded option terminator"
+DATA_U=$(fresh_data terminators)
+printf 'terminator target remains raw' | FM_DATA_OVERRIDE="$DATA_U" "$CL" \
+  append --role captain --chat 14 --msg-id 2 >/dev/null
+set +e
+FM_DATA_OVERRIDE="$DATA_U" "$CL" redact --event-id telegram:14:-:2 \
+  --reason ordinary -- --purge >/dev/null 2>&1
+rc_redact_terminator=$?
+set -e 2>/dev/null || true
+expect_code 2 "$rc_redact_terminator" "redact rejects an unneeded option terminator"
+terminator_result=$(FM_DATA_OVERRIDE="$DATA_U" "$CL" search 'terminator target remains raw')
+assert_contains "$terminator_result" "terminator target remains raw" "a rejected terminator cannot alter content"
 pass "the archive CLI exposes only its required command surface"
 
 # --- concurrent appends serialize the replay decision -----------------------
@@ -244,7 +337,7 @@ pass "concurrent appends make one serialized replay decision"
 # --- credential safety: content never comes from argv or the environment ----
 DATA_C=$(fresh_data creds)
 set +e
-TG_BOT_TOKEN=SECRET_BRIDGE_TOKEN printf 'ordinary message' | \
+printf 'ordinary message' | TG_BOT_TOKEN=SECRET_BRIDGE_TOKEN \
   FM_DATA_OVERRIDE="$DATA_C" "$CL" append --role captain --chat 7 --msg-id 1 >/dev/null 2>&1
 # A stray positional (e.g. a token slipped onto the command line) is rejected.
 FM_DATA_OVERRIDE="$DATA_C" "$CL" append --role captain --chat 7 --msg-id 2 SECRET_ON_ARGV >/dev/null 2>&1
@@ -265,6 +358,14 @@ shown=$(printf '%s\n' "$bounded" | grep -c '^-- ')
 assert_equals "2" "$shown" "search output is bounded by --limit"
 assert_contains "$bounded" "more match(es) not shown" "search names how many matches were withheld"
 pass "retrieval output is bounded"
+
+set +e
+FM_DATA_OVERRIDE="$DATA_B" "$CL" search --limit 999999999999999999999999 \
+  'repeated topic' >/dev/null 2>&1
+rc_limit_overflow=$?
+set -e 2>/dev/null || true
+expect_code 2 "$rc_limit_overflow" "search rejects a limit outside Bash's integer range"
+pass "search limits remain safe for shell integer comparison"
 
 set +e
 FM_DATA_OVERRIDE="$DATA_B" "$CL" search '[' >/dev/null 2>&1

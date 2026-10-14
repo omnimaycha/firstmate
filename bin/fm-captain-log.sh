@@ -56,6 +56,7 @@ ARCHIVE_TEMP_PREFIX=.fm-captain-log.
 REC_VERSION=fmcl1
 TAB=$'\t'
 SEARCH_DEFAULT_LIMIT=20
+SEARCH_LIMIT_MAX=9223372036854775807
 LOCK_HELD=0
 TEMP_FILE=''
 
@@ -89,8 +90,14 @@ valid_event_id() {
   [[ "$1" =~ ^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$ ]]
 }
 
-b64_encode_file() { base64 < "$1" | tr -d '\n'; }
-b64_encode_str() { printf '%s' "$1" | base64 | tr -d '\n'; }
+b64_encode_file() {
+  (set -o pipefail; base64 < "$1" | tr -d '\n')
+}
+
+b64_encode_str() {
+  (set -o pipefail; printf '%s' "$1" | base64 | tr -d '\n')
+}
+
 b64_decode() {
   printf '%s' "$1" | base64 -d 2>/dev/null \
     || printf '%s' "$1" | base64 -D 2>/dev/null
@@ -152,6 +159,15 @@ archive_file_safe() {
   [ "$mode" = 600 ] || die "archive file mode is not 0600: $file"
 }
 
+archive_preflight() {
+  local file
+  archive_dir_safe || die "archive directory is absent"
+  for file in "$ARCHIVE_DIR"/*.log; do
+    [ -e "$file" ] || [ -L "$file" ] || continue
+    archive_file_safe "$file"
+  done
+}
+
 clear_abandoned_replacements() {
   local stale
   for stale in "$ARCHIVE_DIR"/"$ARCHIVE_TEMP_PREFIX"*; do
@@ -188,6 +204,7 @@ archive_lock_acquire() {
   fi
   fm_lock_acquire_wait "$ARCHIVE_LOCK" || die "cannot lock archive"
   LOCK_HELD=1
+  archive_preflight
   clear_abandoned_replacements
 }
 
@@ -230,7 +247,6 @@ cmd_append() {
       --topic) require_option_value append "$@"; topic=$2; shift 2 ;;
       --msg-id) require_option_value append "$@"; msg_id=$2; shift 2 ;;
       --file) require_option_value append "$@"; file=$2; shift 2 ;;
-      --) shift; break ;;
       -*) die "append: unknown option $1" ;;
       *) die "append: unexpected argument $1" ;;
     esac
@@ -252,9 +268,10 @@ cmd_append() {
   local event_id="${channel}:${chat}:${topic}:${msg_id}" body
   if [ -n "$file" ]; then
     [ -f "$file" ] || die "append: --file not found: $file"
-    body=$(b64_encode_file "$file")
+    body=$(b64_encode_file "$file") || die "append: cannot encode message"
   else
-    body=$(base64 | tr -d '\n')
+    body=$(set -o pipefail; base64 | tr -d '\n') \
+      || die "append: cannot encode message"
   fi
 
   local captured_at month target
@@ -299,6 +316,7 @@ EOF
 
 cmd_search() {
   local limit=$SEARCH_DEFAULT_LIMIT query='' regex_status f line decoded shown=0 matched=0
+  local limit_value limit_length
   local _v _event_id _role _channel _chat _topic _captured redacted _body
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -311,6 +329,19 @@ cmd_search() {
   [ "$#" -eq 0 ] || { query=$1; shift; }
   [ "$#" -eq 0 ] || die "search: unexpected extra argument"
   case "$limit" in ''|*[!0-9]*) die "search: --limit must be a number" ;; esac
+  limit_value=$limit
+  while [ "${#limit_value}" -gt 1 ] && [ "${limit_value#0}" != "$limit_value" ]; do
+    limit_value=${limit_value#0}
+  done
+  limit_length=${#limit_value}
+  if [ "$limit_length" -gt "${#SEARCH_LIMIT_MAX}" ] \
+    || { [ "$limit_length" -eq "${#SEARCH_LIMIT_MAX}" ] \
+      && { [ "${limit_value:0:1}" -gt "${SEARCH_LIMIT_MAX:0:1}" ] \
+        || { [ "${limit_value:0:1}" -eq "${SEARCH_LIMIT_MAX:0:1}" ] \
+          && [ "${limit_value:1}" -gt "${SEARCH_LIMIT_MAX:1}" ]; }; }; }; then
+    die "search: --limit is outside the supported range"
+  fi
+  limit=$limit_value
   [ -n "$query" ] || die "search: a <regex> is required"
   if grep -Eq -- "$query" </dev/null 2>/dev/null; then
     :
@@ -363,7 +394,6 @@ cmd_redact() {
       --event-id) require_option_value redact "$@"; event_id=$2; shift 2 ;;
       --reason) require_option_value redact "$@"; reason=$2; shift 2 ;;
       --purge) purge=1; shift ;;
-      --) shift; break ;;
       *) die "redact: unknown option $1" ;;
     esac
   done
@@ -376,7 +406,8 @@ cmd_redact() {
 
   local tomb_at tomb
   tomb_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  tomb=$(b64_encode_str "[redacted ${tomb_at} by captain order: ${reason}]")
+  tomb=$(b64_encode_str "[redacted ${tomb_at} by captain order: ${reason}]") \
+    || die "redact: cannot encode tombstone"
 
   for f in "$ARCHIVE_DIR"/*.log; do
     [ -e "$f" ] || [ -L "$f" ] || continue
