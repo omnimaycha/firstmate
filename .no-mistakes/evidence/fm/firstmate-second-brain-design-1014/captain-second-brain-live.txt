@@ -1,0 +1,46 @@
+Scenario 1: a later clean process recalls only the requested Captain teaching
+appended telegram:direct-7:-:100
+appended telegram:direct-7:-:101
+-- 2026-10-14T09:01:45Z [captain] chat=direct-7 topic=- id=telegram:direct-7:-:100
+Prefer concise deployment notes; cite ticket DP-418.
+Second line survives too.
+archive modes: dir=700 file=600
+estimator=ceil(UTF-8 bytes / 3) conservative-local-estimate
+role=primary
+effective_budget_tokens=7500
+file=data/captain.md bytes=59 estimated_tokens=20 status=present
+file=data/captain-shared.md bytes=0 estimated_tokens=0 status=absent
+file=data/learnings.md bytes=0 estimated_tokens=0 status=absent
+total_estimated_tokens=20
+budget_status=within-budget
+observable result: exact multiline teaching and provenance returned; unrelated raw history and startup injection excluded
+
+Scenario 2: retries are idempotent and unauthenticated roles are refused
+replay telegram:direct-7:-:100
+-- 2026-10-14T09:01:45Z [captain] chat=direct-7 topic=- id=telegram:direct-7:-:100
+Prefer concise deployment notes; cite ticket DP-418.
+Second line survives too.
+fm-captain-log: append: refused role 'group' (only captain or captain-group are captured)
+refused role exit=2
+no matches
+observable result: retry reports replay without replacement; non-Captain content is absent
+
+Scenario 3: redaction and purge remove content while preserving replay identity
+appended telegram:direct-8:-:200
+redacted telegram:direct-8:-:200
+-- 2026-10-14T09:01:49Z [captain] chat=direct-8 topic=- id=telegram:direct-8:-:200 (redacted)
+[redacted 2026-10-14T09:01:50Z by captain order: credential rotated]
+purged telegram:direct-8:-:200
+no matches
+replay telegram:direct-8:-:200
+no matches
+observable result: tombstone is visible after redaction, absent after purge, and retry cannot resurrect content
+
+Scenario 4: a later unsafe archive file blocks all access before output or mutation
+appended telegram:direct-9:-:victim
+search exit=2 stdout-bytes=0 stderr=fm-captain-log: archive file is symlinked: /tmp/fm-captain-log-live.iHgSNv/unsafe/data/captain-log/9999-12.log
+redact exit=2 stdout-bytes=0 stderr=fm-captain-log: archive file is symlinked: /tmp/fm-captain-log-live.iHgSNv/unsafe/data/captain-log/9999-12.log
+victim hash unchanged=yes abandoned replacement retained=yes outside content=outside bytes remain unchanged
+-- 2026-10-14T09:01:53Z [captain] chat=direct-9 topic=- id=telegram:direct-9:-:victim
+preflight victim remains unchanged
+observable result: unsafe later state yields no partial output, no rewrite, no cleanup, and no symlink-target change

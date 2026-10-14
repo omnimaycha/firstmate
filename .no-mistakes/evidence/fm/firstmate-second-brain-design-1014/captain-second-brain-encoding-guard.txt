@@ -1,0 +1,10 @@
+Scenario 5: encoding failure aborts capture, while purge does not depend on encoding
+fm-captain-log: append: cannot encode message
+append-with-failing-base64 exit=2
+appended telegram:direct-10:-:300
+-- 2026-10-14T09:02:26Z [captain] chat=direct-10 topic=- id=telegram:direct-10:-:300
+complete retry after encoder recovery
+appended telegram:direct-10:-:301
+purged telegram:direct-10:-:301
+no matches
+observable result: failed encoding creates no replay marker, a complete retry succeeds, and purge succeeds with the encoder unavailable
