@@ -21,20 +21,26 @@ Recall only reads; it never curates, re-tiers, or declares a tier.
 ## When to recall
 
 - Before writing a worker brief whose `## Captain's intent` needs the Captain's own standing guidance on the subject, so the worker receives it instead of relying on Firstmate's memory of chat.
-- After a model switch or at the start of a new session, when a Captain preference, rule, or decision the turn depends on is not in the injected `data/captain.md` / `data/learnings.md`.
+- After a model switch or at the start of a new session, when a Captain preference, rule, or decision the turn depends on is not in the injected `data/captain.md`, `data/captain-shared.md`, or `data/learnings.md`.
 - When a current turn cites "what the Captain said" about a topic and the as-said wording matters.
 
 ## How to recall
 
-1. Search the raw as-said archive for the topic:
+1. Read the `Memory layering` declarations in `data/captain.md` and `data/captain-shared.md` before consulting any stored guidance.
+   A local `data/captain.md` declaration wins for this home when both files declare tiers.
+   Determine whether a declared external tier owns the topic's knowledge class and whether this session can reach it.
+2. When a declared tier owns that class, query its named destination through the tier's normal retrieval interface first.
+   If the tier is unreachable, say that current guidance could not be established and label every local or raw match as cache or history rather than current intent.
+3. Read the curated local view with a scoped search of `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md` for the same topic.
+4. Check open and past decisions the Captain owns through the backlog and `bin/fm-captain-hold.sh`.
+5. Search the raw as-said archive for the topic:
    `bin/fm-captain-log.sh search <regex>` (add `--limit <n>` to widen the bounded output).
    Each result carries its UTC time, role, source chat/topic, and event id, which is the provenance to cite.
-2. Read the curated current view with a scoped grep of `data/captain.md` and `data/learnings.md` for the same topic.
-3. Check open and past decisions the Captain owns through the backlog and `bin/fm-captain-hold.sh`.
 
 ## How to use what you recall
 
 - Quote or paraphrase only the matches that bear on the current topic; never paste the whole archive into a brief or a reply.
 - Carry the provenance so a later reader can find the source: the curated entry's `(src: ...)` pointer, or the raw archive event id.
-- When a recalled raw message contradicts a curated entry, treat the curated view as the current intent and the archive as the as-said history; a genuine conflict is a curation question for `/stow`, not something this skill resolves.
+- Resolve contradictions by the declared owner: an applicable external tier is authoritative for its named classes, while the curated local and shared files are current only for classes no external tier owns.
+- Treat the raw archive as as-said history, never as current guidance when an authoritative tier, current curated owner, or later recorded Captain decision supersedes it; a genuine unresolved conflict is a curation question for `/stow`, not something this skill resolves.
 - Recall is read-only: a correction, a new durable fact, or a redaction request goes to its owner (`/stow`, or `bin/fm-captain-log.sh redact` for a Captain-directed scrub), never into an edit made from here.
