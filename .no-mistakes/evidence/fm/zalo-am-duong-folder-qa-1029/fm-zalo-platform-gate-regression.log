@@ -1,0 +1,2 @@
+pre_fix_exit=1 pre_fix_output=fm-zalo-folder-qa: unsupported platform; Linux is required
+target_exit=0 target_help=Usage:

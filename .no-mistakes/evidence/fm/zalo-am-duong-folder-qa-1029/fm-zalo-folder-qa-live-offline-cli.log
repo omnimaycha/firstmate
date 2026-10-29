@@ -1,0 +1,17 @@
+SCENARIO: valid private configuration is accepted without revealing private values
+configured: exact Zalo group and exact Graph drive/folder; answers unavailable
+SCENARIO: exact group stock question receives only the unavailable response
+{"action":"reply","reason":"source-unavailable","answer":"Nguồn dữ liệu Check tồn kho âm hiện chưa khả dụng; tôi chưa thể trả lời từ dữ liệu đã xác minh."}
+SCENARIO: mutation and prompt-override request cannot change the response
+{"action":"reply","reason":"source-unavailable","answer":"Nguồn dữ liệu Check tồn kho âm hiện chưa khả dụng; tôi chưa thể trả lời từ dữ liệu đã xác minh."}
+SCENARIO: traversal request cannot access another path
+{"action":"reply","reason":"source-unavailable","answer":"Nguồn dữ liệu Check tồn kho âm hiện chưa khả dụng; tôi chưa thể trả lời từ dữ liệu đã xác minh."}
+SCENARIO: direct message is ignored
+{"action":"ignore","reason":"direct-message"}
+SCENARIO: other group is ignored
+{"action":"ignore","reason":"wrong-group"}
+SCENARIO: malformed sender metadata is ignored
+{"action":"ignore","reason":"malformed-event"}
+SCENARIO: run with no private configuration stops before initialization or transport
+fm-zalo-folder-qa: missing private configuration: /tmp/fm-zalo-live.AhR9KX/config/not-configured.env
+run_exit=1 state_created=no

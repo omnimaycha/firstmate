@@ -1,0 +1,27 @@
+1..23
+ok - unsupported platforms retain portable commands and reject the runtime
+ok - exact group, drive, and folder pins are required without exposing tokens
+ok - receipt capacity is required, positive, and bounded
+ok - configuration and refresh token require exact private-file properties
+ok - offline check is redacted and executable handlers are not configurable
+ok - DMs, other groups, bot messages, and malformed events stay offline
+ok - run rejects malformed event types before reserving or sending
+ok - all exact-group questions receive only the fixed unavailable response offline
+ok - Graph probe is drive/folder-pinned and makes no freshness claim
+jq: parse error: Invalid numeric literal at EOF at line 1, column 9
+jq: parse error: Invalid numeric literal at EOF at line 1, column 9
+ok - drive, folder, token-scope, and malformed Graph responses fail closed
+ok - credential-bearing curl calls ignore hostile default configuration
+ok - run requires exact string bot identity and group capability
+ok - run acquires and releases the portable lock without flock
+ok - integrated run ignores DMs and other groups and rejects malformed polls
+ok - integrated run sends only the fixed response and deduplicates across restarts
+ok - crash-window pending receipts stop restart for operator reconciliation
+ok - run initializes and updates its receipt count without exceeding capacity
+ok - receipt I/O and cleanup errors stop without sending or masquerading as duplicates
+ok - file and directory sync failures stop at both receipt transitions
+ok - durability helper ignores ambient Python injection
+ok - first-use state publication is durable before external operations
+ok - state publication is serialized and crash-recovered before external operations
+ok - malformed sends fail closed and arbitrary public replies are unavailable
+FM_TEST_COMPLETE
